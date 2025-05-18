@@ -1,0 +1,24 @@
+{
+  "name": "lambda-textract-propaws",
+  "version": "1.0.0",
+  "description": "lambda propuesta por AWS plantilla en node Js para procesar por medio de Textract",
+  "homepage": "https://github.com/angaritan/lambda-textract-propaws#readme",
+  "bugs": {
+    "url": "https://github.com/angaritan/lambda-textract-propaws/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/angaritan/lambda-textract-propaws.git"
+  },
+  "license": "ISC",
+  "author": "Nelson Javier Angarita",
+  "main": "index.js",
+  "scripts": {
+    "test": "npm run test"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1692.0",
+    "dotenv": "^16.4.7",
+    "uuid": "^11.1.0"
+  }
+}
