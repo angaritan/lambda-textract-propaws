@@ -1,0 +1,202 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: procimg-texttract
+Parameters:
+  PositiveS3OutBucketName:
+    Type: String
+    Description: Nombre del bucket para los archivos positivos
+    Default: ""
+  PolicyBoundary:
+    Type: String
+    Description: Valor del permission boundary para la creacion de roles
+    Default: ""
+  VPCApiMayorista:
+    Type: String
+    Description: VPC ApiMayorista para conexion a internet
+  subNet1:
+    Type: String
+    Description: SubNet ApiMayorista para conexion a internet
+    Default: ""
+  subNet2:
+    Type: String
+    Description: SubNet ApiMayorista para conexion a internet
+    Default: ""
+  securityVPC:
+    Type: String
+    Description: Grupo de seguridad de ApiMayorista para conexion a internet
+  pKMSKeyID:
+    Type: String
+    Description: Llave kms para el manejo de encriptación.
+  routeTableId:
+    Type: String
+    Description: Id de la ruta de la tabla ApiMayorista para conexion a internet
+    Default: ""
+
+Resources:
+  LMProcimgTexttract:
+    Type: AWS::Serverless::Function
+    #checkov:skip=CKV_AWS_116:No need for DLQ on this Lambda.
+    #checkov:skip=CKV_AWS_115:The concurrency is not defined yet.
+    Properties: 
+      FunctionName: LMprocimg-texttract
+      CodeUri: src/
+      Handler: handler/textractPDFProcess.handler      
+      Runtime: nodejs20.x
+      Role: !GetAtt LMTextractProcimgRole.Arn
+      MemorySize: 512
+      Timeout: 120
+      EphemeralStorage:
+        Size: 512
+      EventInvokeConfig:
+        MaximumEventAgeInSeconds: 21600
+        MaximumRetryAttempts: 2
+      PackageType: Zip
+      SnapStart:
+        ApplyOn: None
+      VpcConfig:
+        SecurityGroupIds:
+        - !Sub ${securityVPC}
+        SubnetIds:
+        - !Sub ${subNet1}
+        - !Sub ${subNet2}
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      Architectures:
+        - x86_64
+      # Environment:
+      #   Variables:
+      #     TABLE_RC_COMPANY: "Empresas_RC"
+
+  LMTextractProcimgRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: LMtextract-procing-Role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - textract.amazonaws.com                
+                - lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Description: "Rol que va a asumir la Lambda procimg-texttract"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      PermissionsBoundary: !Sub 'arn:aws:iam::${AWS::AccountId}:policy/${PolicyBoundary}'
+      Path: '/dev/'
+      Policies:
+        - PolicyName: LMBuEntradaLAPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+            - Sid: S3BucketAccessOutPermissions
+              Effect: Allow
+              Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:CopyObject 
+              Resource:
+              - !Sub 'arn:aws:s3:::${PositiveS3OutBucketName}/*'
+            - Sid: KMSDecryptLaPermissions
+              Effect: Allow
+              Action:
+              - kms:Decrypt
+              - kms:Encrypt
+              Resource:
+              - !Ref pKMSKeyID
+        - PolicyName: LMSQSTextractprocingLAPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+            - Effect: Allow
+              Action:
+              - sqs:SendMessage 
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:GetQueueAttributes              
+              - sqs:GetQueueUrl
+              - kms:Decrypt
+              - kms:Encrypt
+              Resource:
+              - !Sub 'arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:SQSTextractTxtSalida.fifo'
+              - !Sub 'arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:SQSTextractTxtSalida-dlq.fifo'
+        - PolicyName: LMObParTextractLMPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+            - Effect: Allow
+              Action:
+              - ssm:GetParametersByPath
+              - ssm:GetParameters
+              - ssm:GetParameter
+              Resource:
+              - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/textract-process/configuration/*'
+
+  # VPC Endpoint 
+  
+  SQSEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Sub ${VPCApiMayorista}
+      ServiceName: com.amazonaws.us-east-1.sqs
+      VpcEndpointType: Interface
+      SubnetIds:
+      - !Sub ${subNet1}
+      - !Sub ${subNet2}
+      SecurityGroupIds:
+      - !Sub ${securityVPC} 
+
+  pUrlSQSTExtracEntrada:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /textract-process/configuration/aws.sqs.entrada-textract-proc.url
+      Type: String
+      Value: !Sub https://sqs.us-east-1.amazonaws.com/${AWS::AccountId}/SQSTextractPdfEnt
+      Description: Url para la conexión con el SQS SQSTextractPdfEnt entrada.
+        
+  pUrlSQSTExtracSalida:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /textract-process/configuration/aws.sqs.salida-textract-proc.url
+      Type: String
+      Value: !Sub https://sqs.us-east-1.amazonaws.com/${AWS::AccountId}/SQSTextractTxtSalida.fifo
+      Description: Url para la conexión con el SQS SQSTextractTxtSalida.fifo salida.
+
+  pUrlSQSTExtracSalidaDLQ:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /textract-process/configuration/aws.sqs.salida-textract-dlq-proc.url
+      Type: String
+      Value: !Sub https://sqs.us-east-1.amazonaws.com/${AWS::AccountId}/SQSTextractTxtSalida-dlq.fifo
+      Description: Url para la conexión con el SQS SQSTextractTxtSalida-dlq.fifo salida.
+
+  pPositiveS3OutBucketName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /textract-process/configuration/aws.s3.bucket-salida-textract
+      Type: String
+      Value: !Sub ${PositiveS3OutBucketName}
+      Description: Nombre del bucket S3 donde se carga archivo txt procesado.  
+
+  pRoleEjecucionArn:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /textract-process/configuration/aws.rol.role-ejecucion
+      Type: String
+      Value: !GetAtt LMTextractProcimgRole.Arn
+      Description: Rol de ejecucion desde lambda.
+
+  pSNSTopicTextract:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /textract-process/configuration/aws.sns.topic-textract
+      Type: String
+      Value: !Sub 'arn:aws:sns:${AWS::Region}:${AWS::AccountId}:amazontextract-sns-notifications.fifo'
+      Description: Identificacion de Topico para Notificaciones a SQS Salida.
+
+Outputs:
+  LambdaFunctionArn:
+    Description: "Arn de la Lambda procesar achivos pdf llamando Textract"
+    Value: !GetAtt LMProcimgTexttract.Arn
